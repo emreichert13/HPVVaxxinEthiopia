@@ -4,11 +4,31 @@ output: html_notebook
 ---
 
 ##Base Scenario
+# (Change these probabilities to explore results)
 PrInSchool = 0.80
 PrOutSchool = 0.50
 
 source("FinalProject.Rmd")
+
+#Outcomes Averted
+sum(cases$CaseAverted)
+sum(cases$DeathAverted)
+sum(cases$CHE_Averted)
+
+#Equity Measures
+cases %>% 
+  group_by(income_quint) %>%
+  summarise(CaseAvert = sum(CaseAverted),
+            DeathAvert = sum(DeathAverted),
+            CHEAvert = sum(CHE_Averted))
+cases %>%
+  summarise(CaseEquity = sum(CaseAverted[income_quint == 5])/sum(CaseAverted[income_quint == 1]),
+            CHEEquity = sum(CHE_Averted[income_quint == 5])/sum(CHE_Averted[income_quint == 1]))
+
+#Total Govt Cost
 govt_cost
+
+#Cost per Outcome Averted
 govt_cost/sum(cases$CaseAverted)
 govt_cost/sum(cases$DeathAverted)
 govt_cost/sum(cases$CHE_Averted)
