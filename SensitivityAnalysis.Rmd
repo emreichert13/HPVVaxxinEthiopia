@@ -1,0 +1,16 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+##Base Scenario
+PrInSchool = 0.80
+PrOutSchool = 0.50
+
+source("FinalProject.Rmd")
+govt_cost
+govt_cost/sum(cases$CaseAverted)
+govt_cost/sum(cases$DeathAverted)
+govt_cost/sum(cases$CHE_Averted)
+
+
