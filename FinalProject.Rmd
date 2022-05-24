@@ -1,0 +1,338 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+GHP 501 Final Project
+E Reichert, J McCann
+
+```{r}
+library(dplyr)
+library(readr)
+library(haven)
+
+#read in Ethiopia dhs 2019 mini data w/ desired variables
+households19  <- read_dta("ETPR81FL.DTA") %>%
+  dplyr::select(CaseID = hhid, HouseholdID = hv002, members = hv009, wealthindex = hv270, sex = hv104, age = hv105) %>%
+  mutate(sex_cat = ifelse(sex == 1, "M",
+                          ifelse(sex == 2, "F", NA)))
+
+
+summary(households19)
+```
+
+```{r}
+#create variable signaling 10-14 yo females
+households19 <- households19 %>%
+  mutate(targetF = ifelse(sex == 2 & age >= 10 & age <= 14, 1, 0))
+
+school_check <- households19 %>%
+  group_by(wealthindex) %>%
+  summarise(total= sum(targetF))
+```
+
+```{r}
+#analyze distribution of girls in this cohort among income quintiles
+household_check <- households19 %>%
+  group_by(CaseID, HouseholdID, members, wealthindex) %>%
+  summarise(N = n(), targetF = sum(targetF))
+
+household_check %>%
+  group_by(wealthindex) %>%
+  summarise(N = n(), None = sum(targetF == 0), None_pct = None/N, One_plus = sum(targetF >0), One_pluspct = One_plus/N)
+
+sum(household_check$targetF > 0)/8663
+sum(household_check$targetF > 1)/2666
+
+#if we look at percentage of households each at least 1+ girl in this age group, by wealth index, we'd expect:
+# 22.8% of households to be Q1
+# 21.4% of households to be Q2
+# 22.1% of households to be Q3
+# 20.4% of households to be Q4
+# 13.3% of households to be Q5
+```
+
+I. Create mock dataset with the 7M girls in this cohort
+
+```{r}
+set.seed(12)
+#Total pop. of Ethiopia is 120 mil. Average household size is 4.7 persons.
+# From WorldBank, ~12% of female population in Ethiopia is between 10-14
+# Total female pop. is ~60 mil, so 7.16 mil girls in this age group
+
+# another way to calculate is expected # of households * observed proportion with girls in this age group, from 2019 DHS mini dataset
+No_households <- 120000000/4.7*.275 #this gives 7.021M
+
+#Let's approximate this population with a cohort of 10-14 year old girls estimated to be 7M in 7M unique households
+
+ID <- seq(1, 7000000, 1)
+#apportion 7M into households w/ income quintiles
+income_quint <- c(rep(1, 1596000), rep(2,1498000), rep(3,1547000), rep(4, 1428000), rep(5, 931000))
+
+df <- data.frame(ID, income_quint)
+```
+```{r}
+#Assign school attendance Y/N for each girl
+#probability of attendance depends on income quintile
+df <- df %>%
+  mutate(InSchool = rbinom(nrow(df), 1, ifelse(income_quint == 1, 0.598, 
+                                               ifelse(income_quint == 2,0.740 ,
+                                                      ifelse(income_quint == 3, 0.767, 
+                                                             ifelse(income_quint == 4, 0.821,
+                                                                    ifelse(income_quint == 5, 0.807, 0)))))))
+
+df %>% 
+  group_by(income_quint) %>%
+  summarise(school = sum(InSchool), school_pct = school/n())
+```
+
+
+```{r}
+set.seed(123)
+#Assign vaxx status for each girl
+# Start with Pr of vaxx in school = 0.80, out of school = 0.50
+# Can change these params in sensitivity analysis
+PrInSchool = 0.8
+PrOutSchool = 0.5
+
+df <- df %>%
+  mutate(Vaxx = rbinom(nrow(df), 1, ifelse(InSchool == 1, PrInSchool, PrOutSchool)))
+ # mutate(Vaxx = rbinom(nrow(df), 1, 0.5))
+
+df %>%
+  group_by(income_quint) %>%
+  summarise(vaccinated = sum(Vaxx), vaccinated_pct = vaccinated/n())
+
+df %>% group_by(InSchool) %>%
+  summarise(vaccinated = sum(Vaxx), vaccinated_pct = vaccinated/n())
+```
+
+```{r}
+#Add in intervention cost (cost of vaxx per FIG) for those who receive vaccine
+# avg. cost of school-based vaxx in 2014 USD is 10.46, facility based is 8.20 USD
+# inflation of 21% to 2022 USD
+
+df <- df %>%
+  mutate(Vaxx_cost = ifelse(Vaxx==1 & InSchool==1, round(10.46*1.21,2),
+                            ifelse(Vaxx==1 & InSchool==0, round(8.20*1.21,2), 0)))
+```
+
+```{r}
+set.seed(1234)
+
+#Now we will estimate total no. of cervical cancer cases in this cohort
+#Read in survival table created for women in this cohort, using lifetable among females in 2019 in Ethiopia and cervical cancer case/death incidence by age from GLOBOCAN 2020
+#library(readxl)
+#ethiopia_stats <- read_excel("ethiopia_stats.xlsx")
+
+#calculate total cervical cancer cases & deaths
+cases <- round(sum(ethiopia_stats$CervCancer),0)
+deaths <- round(sum(ethiopia_stats$CancerDeath),0)
+
+#Relative self-reported prevalence of STI in females, by income quintile
+STI_prev <- c(0.4, 0.1, 0.1, 0.4, 0.4) 
+A <- STI_prev/sum(STI_prev) #relative distribution of risk factor
+Cases_perquint <- round(A*cases,0)
+Deaths_perquint <- round(A*deaths, 0)
+
+ethiopia_stats <- ethiopia_stats %>%
+  mutate(PrbyAge = CervCancer/sum(CervCancer))
+PrbyAge <- ethiopia_stats$PrbyAge
+
+#list households within each quintile
+Q1_ids <- seq(1, max(df$ID[df$income_quint == 1]))
+Q2_ids <- seq(min(df$ID[df$income_quint == 2]), max(df$ID[df$income_quint == 2]))
+Q3_ids <- seq(min(df$ID[df$income_quint == 3]), max(df$ID[df$income_quint == 3]))
+Q4_ids <- seq(min(df$ID[df$income_quint == 4]), max(df$ID[df$income_quint == 4]))
+Q5_ids <- seq(min(df$ID[df$income_quint == 5]), max(df$ID[df$income_quint == 5]))
+
+#randomly apportion cases to households, by income quintile
+Q1_cases <- data.frame(matrix(NA, nrow = Cases_perquint[1])) %>%
+  mutate(ID = sample(Q1_ids, size = Cases_perquint[1], replace = F),
+         TimetoCase = sample(x=c(seq(5, 75, 5)), size=Cases_perquint[1], replace = T, prob=PrbyAge)) %>%
+  dplyr::select(c(2:3))
+
+Q2_cases <- data.frame(matrix(NA, nrow = Cases_perquint[2])) %>%
+  mutate(ID = sample(Q2_ids, size = Cases_perquint[2], replace = F),
+         TimetoCase = sample(x=c(seq(5, 75, 5)), size=Cases_perquint[2], replace = T, prob=PrbyAge)) %>%
+  dplyr::select(c(2:3))
+
+Q3_cases <- data.frame(matrix(NA, nrow = Cases_perquint[3])) %>%
+  mutate(ID = sample(Q3_ids, size = Cases_perquint[3], replace = F),
+         TimetoCase = sample(x=c(seq(5, 75, 5)), size=Cases_perquint[3], replace = T, prob=PrbyAge)) %>%
+  dplyr::select(c(2:3))
+
+Q4_cases <- data.frame(matrix(NA, nrow = Cases_perquint[4])) %>%
+  mutate(ID = sample(Q4_ids, size = Cases_perquint[4], replace = F),
+         TimetoCase = sample(x=c(seq(5, 75, 5)), size=Cases_perquint[4], replace = T, prob=PrbyAge)) %>%
+  dplyr::select(c(2:3))
+
+Q5_cases <- data.frame(matrix(NA, nrow = Cases_perquint[5])) %>%
+  mutate(ID = sample(Q5_ids, size = Cases_perquint[5], replace = F),
+         TimetoCase = sample(x=c(seq(5, 75, 5)), size=Cases_perquint[5], replace = T, prob=PrbyAge)) %>%
+  dplyr::select(c(2:3))
+
+Cases <- rbind(Q1_cases, Q2_cases, Q3_cases, Q4_cases, Q5_cases)
+
+#assign those households 'dplyr::selected' to have female with cervical cancer to CervCancer ==1
+df <- df %>%
+  mutate(CervCancer = ifelse(ID %in% Cases$ID, 1, 0))
+
+#Check no. of cases per income quintile
+df %>% group_by(income_quint) %>%
+  summarise(sum(CervCancer))
+
+#Merge on the time to case data
+df <- left_join(df, Cases, by = "ID")
+```
+
+```{r}
+#Randomly apportion deaths to households, by income quintile
+Q1_Deaths <- sample(Q1_cases$ID, size = Deaths_perquint[1], replace = F)
+Q2_Deaths <- sample(Q2_cases$ID, size = Deaths_perquint[2], replace = F)
+Q3_Deaths <- sample(Q3_cases$ID, size = Deaths_perquint[3], replace = F)
+Q4_Deaths <- sample(Q4_cases$ID, size = Deaths_perquint[4], replace = F)
+Q5_Deaths <- sample(Q5_cases$ID, size = Deaths_perquint[5], replace = F)
+
+Deaths <- c(Q1_Deaths, Q2_Deaths, Q3_Deaths, Q4_Deaths, Q5_Deaths)
+
+#assign those households 'dplyr::selected' to have female with cervical cancer death to CervDeath ==1
+df <- df %>%
+  mutate(CervDeath = ifelse(ID %in% Deaths, 1, 0))
+
+#Assign a status of attributable to HPV types 16 or 18 to ~65% of cervical cancer cases
+#Assign radiotherapy care-seeking status by income quintile
+df <- df %>%
+  mutate(Hpv_1618type = rbinom(nrow(df), 1, ifelse(CervCancer == 1, 0.65, 0)),
+         SeekCare = rbinom(nrow(df), 1, ifelse(CervCancer == 1 & income_quint == 1, 0.055, 
+                                               ifelse(CervCancer == 1 & income_quint == 2, 0.067,
+                                                      ifelse(CervCancer == 1 & income_quint == 3, 0.046, 
+                                                             ifelse(CervCancer == 1 & income_quint == 4, 0.094,
+                                                                    ifelse(CervCancer == 1 & income_quint == 5, 0.123, 0)))))))
+
+#check care-seeking proportions
+df %>%
+  filter(CervCancer == 1) %>%
+  group_by(income_quint) %>%
+  summarise(sum(SeekCare), sum(SeekCare)/n())
+```
+
+
+```{r}
+#Add in household income data
+#source("Income_simulation.R")
+
+df <- merge(df, income_dat, by = c("ID"))
+df$Income <- round(df$Income, 2)
+
+# Check income distribution by quintile
+df %>%
+  group_by(income_quint) %>%
+  summarise(mean(Income), min(Income), max(Income))
+
+# incomes disribution simulated on parameters from 2015, inflate to 2022 USD
+df <- df %>%
+  mutate(Income_22 = round(Income*1.21,2))
+```
+II. Perform ECEA on subset of data w/ cervical cancer case
+
+```{r}
+cases <- df %>%
+  filter(CervCancer == 1)
+
+#OOP cost of cervical cancer treatment in Ethiopia in 2015 USD: ~$482
+# inflate to 2022 USD cost
+p = 0.0539 #avg inflation rate for LMICs in past 10 years
+q = 0.03 #discount rate
+
+cases <- cases %>%
+  mutate(OOPCost_22 = ifelse(SeekCare==1, round(482*1.21,2), 0),
+         GovtCost_22 = ifelse(SeekCare==1, round(218*1.21, 2), 0),
+         OOPCost_YrCase = round(OOPCost_22 * (1+p)^TimetoCase,2),
+         GovtCost_YrCase = round(GovtCost_22 * (1+p)^TimetoCase,2),
+         OOPCost_DCT= round(OOPCost_YrCase/(1+q)^TimetoCase,2),
+         GovtCost_DCT = round(GovtCost_YrCase/(1+q)^TimetoCase,2))
+```
+
+```{r}
+#Calculate cases and deaths averted
+cases <- cases %>%
+  mutate(CervCancer_Vaxx = ifelse(Vaxx==1 & CervCancer==1 & Hpv_1618type==1, 0, CervCancer),
+         CervDeath_Vaxx = ifelse(CervCancer == 1 & CervCancer_Vaxx == 0, 0, CervDeath),
+         CaseAverted = ifelse(CervCancer == 1 & CervCancer_Vaxx == 0, 1, 0),
+         DeathAverted = ifelse(CervDeath == 1 & CervDeath_Vaxx == 0, 1, 0))
+```
+
+```{r}
+# Calculate CHE and IHE
+
+#Avg consumption expenditures by quintile, 2015 USD: 218, 367, 501, 682, 1418
+# according to Central Statistical Agency, Ethiopia 2018 report
+consump_quint <- c(218, 367, 501, 682, 1418)
+
+#Avg income by quintile, 2015 USD: 385, 712, 1008, 1380, 2188
+cases %>%
+  group_by(income_quint) %>%
+  summarise(mean(Income))
+income_quint <- c(385, 712, 1008, 1380, 2188)
+
+#Calculate consumption expenditure as percent of income by quintile
+percent_consump <- consump_quint/income_quint
+
+cases <- cases %>%
+  mutate(Consump_22 = ifelse(income_quint == 1, Income_22*percent_consump[1], 
+                                               ifelse(income_quint == 2, Income_22*percent_consump[2],
+                                                      ifelse(income_quint == 3, Income_22*percent_consump[3], 
+                                                             ifelse(income_quint == 4, Income_22*percent_consump[4],
+                                                                    ifelse(income_quint == 5, Income_22*percent_consump[5], 0))))),
+         IncomeAdj_22 = Income_22-Consump_22,
+         IncomeAdj_YrCase = round(IncomeAdj_22 * (1+p)^TimetoCase,2))
+```
+```{r}
+#calculate CHE as 40% of income - consumption
+#everything with the '_Vaxx' is what happens under vaccination scenario
+cases <- cases %>%
+  mutate(CHE = ifelse(OOPCost_YrCase/IncomeAdj_YrCase >= 0.40, 1, 0),
+         OOPCost_YrCase_Vaxx = ifelse(CaseAverted == 1, 0, OOPCost_YrCase),
+         OOPCost_DCT_Vaxx = ifelse(CaseAverted == 1, 0, OOPCost_DCT),
+         GovtCost_YrCase_Vaxx = ifelse(CaseAverted == 1, 0, GovtCost_YrCase),
+         GovtCost_DCT_Vaxx = ifelse(CaseAverted == 1, 0, GovtCost_DCT),
+         CHE_Vaxx = ifelse(OOPCost_YrCase_Vaxx/IncomeAdj_YrCase >= 0.40, 1, 0),
+         CHE_Averted = ifelse(CHE == 1 & CHE_Vaxx == 0, 1, 0))
+
+#total CHE cases averted
+sum(cases$CHE_Averted, na.rm = T)
+sum(cases$CaseAverted)
+sum(cases$DeathAverted)
+```
+
+```{r}
+#Total cost calculations
+sum(df$Vaxx_cost)
+sum(cases$OOPCost_DCT)
+sum(cases$OOPCost_DCT_Vaxx)
+sum(cases$GovtCost_DCT)
+sum(cases$GovtCost_DCT_Vaxx)
+
+#total cost of vaccination programme to govt
+govt_cost <- sum(df$Vaxx_cost)
+#total OOP savings
+oop_savings <- sum(cases$OOPCost_DCT)-sum(cases$OOPCost_DCT_Vaxx)
+#total govt health expenditure savings
+govt_savings <- sum(cases$GovtCost_DCT)-sum(cases$GovtCost_DCT_Vaxx)
+```
+
+
+```{r}
+cases %>% 
+  group_by(income_quint) %>%
+  summarise(CaseAvert = sum(CaseAverted),
+            DeathAvert = sum(DeathAverted),
+            CHEAvert = sum(CHE_Averted))
+
+cases %>%
+  summarise(CaseEquity = sum(CaseAverted[income_quint == 5])/sum(CaseAverted[income_quint == 1]),
+            CHEEquity = sum(CHE_Averted[income_quint == 5])/sum(CHE_Averted[income_quint == 1]))
+```
+
+

@@ -1,0 +1,64 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Final Project GHP 501/201
+Data Visuals
+
+```{r}
+case_summary <- cases %>%
+  group_by(income_quint, InSchool) %>%
+  summarise('Cervical Cancer Cases' = sum(CaseAverted),
+            'Cervical Cancer Deaths' = sum(DeathAverted),
+            'CHE' = sum(CHE_Averted))
+
+averted_plot <- case_summary %>%
+  gather(., key = Metric, value = CasesAverted, -income_quint, -InSchool)
+ 
+averted_plot$InSchool[averted_plot$InSchool == 1] <- "Yes"
+averted_plot$InSchool[averted_plot$InSchool == 0] <- "No"
+
+averted_plot$income_quint <- paste("Q", averted_plot$income_quint, sep="")
+
+jpeg(file="Figure2.png", width=1500, height=700)
+ggplot(data=averted_plot, aes(x=income_quint, y=CasesAverted, fill = factor(InSchool))) +
+  geom_bar(stat="identity", position = "stack")  + facet_grid(~Metric) + xlab("Income Quintile") + ylab("Cases Averted") + theme_light() + labs(fill = "In School") + scale_fill_manual(values = c("darkolivegreen3", "darkgreen")) + theme(text = element_text(size=28), strip.text = element_text(size=28))
+dev.off()
+```
+
+
+```{r}
+df_summary <- df %>%
+  group_by(income_quint, InSchool, Vaxx) %>%
+  summarise(N = n())
+
+df_summary$income_quint <- paste("Q", df_summary$income_quint, sep="")
+
+df_summary$InSchool[df_summary$InSchool == 1] <- "School"
+df_summary$InSchool[df_summary$InSchool == 0] <- "Out of School"
+
+df_summary$Vaxx[df_summary$Vaxx == 1] <- "Vaccinated"
+df_summary$Vaxx[df_summary$Vaxx == 0] <- "Unvaccinated"
+
+#df_plot <- df_summary %>%
+  #gather(., key = group, value = count, -income_quint)
+
+library(treemap)
+treemap(df_summary,
+            index=c("income_quint", "InSchool", "Vaxx"),
+            vSize="N",
+            type="index"
+            )
+
+jpeg(file="Figure1C.png", width=1000, height=700)
+df_summary$Group <- paste(df_summary$Vaxx, df_summary$InSchool, sep=": ")
+ggplot(data=df_summary, aes(x=income_quint, y=N, fill = Group)) +
+  geom_bar(stat="identity", position = "stack") + xlab("Income Quintile") + ylab("Number of Girls") + theme_classic() + labs(fill = "") + scale_fill_manual(values = c("coral", "firebrick1", "slateblue1", "royalblue4")) + theme(text = element_text(size=25))
+dev.off()
+```
+
+```{r}
+
+```
+
